@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Triangulos Interativos - PyScript</title>
+
+    <!-- PyScript -->
+    <link rel="stylesheet" href="https://pyscript.net/releases/2024.3.1/core.css" />
+    <script type="module" src="https://pyscript.net/releases/2024.3.1/core.js"></script>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background: #fafafa;
+        }
+
+        .container {
+            display: flex;
+            gap: 20px;
+        }
+
+        #controls {
+            width: 260px;
+        }
+
+        #canvas-container {
+            border: 1px solid #000;
+            background: white;
+            position: relative;
+        }
+
+        canvas {
+            border: 1px solid #aaa;
+            display: block;
+        }
+
+        .input-row {
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+
+<body>
+
+<h2>Triangulos Interativos (PyScript)</h2>
+
+<div class="container">
+
+    <div id="controls">
+        <div class="input-row">
+            Lado A: <input type="text" id="ladoA" value="3">
+        </div>
+
+        <div class="input-row">
+            Lado B: <input type="text" id="ladoB" value="4">
+        </div>
+
+        <div class="input-row">
+            Lado C: <input type="text" id="ladoC" value="5">
+        </div>
+
+        <button id="gerar">Gerar Segmentos</button>
+        <button id="excluir">Excluir Triangulo Selecionado</button>
+
+        <h4>Status:</h4>
+        <div id="status">Aguardando dados.</div>
+    </div>
+
+    <div id="canvas-container">
+        <canvas id="canvas" width="700" height="500"></canvas>
+    </div>
+
+</div>
+
+<!-- ================== PYTHON (PyScript) ====================== -->
+<script type="py">
+from js import document
+from pyodide.ffi import create_proxy
+import math
+
+canvas = document.getElementById("canvas")
+ctx = canvas.getContext("2d")
+
+# grupo: {"segments":[...], "locked":bool, "polygon":[(x,y),...],
+#         "can_triangle":bool, "fillColor":str|None}
+groups = []
+active_group = None
+selected_group = None
+
+dragging_segment = None      # (group, seg)
+dragging_point = None        # (group, seg, "p1"/"p2")
+dragging_triangle_group = None
+last_mouse = None
+
+zoom = 1.0
+SNAP_DIST = 12
+
+# ----------------- FUNCOES AUXILIARES --------------------
+def set_inputs_enabled(enabled: bool):
+    for _id in ("ladoA", "ladoB", "ladoC", "gerar"):
+        document.getElementById(_id).disabled = not enabled
+
+def distance(p1, p2):
+    return ((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2) ** 0.5
+
+def draw_point(x, y, color):
+    ctx.beginPath()
+    ctx.fillStyle = color
+    ctx.arc(x, y, 7, 0, 6.28)
+    ctx.fill()
+
+def draw_side_marks(group):
+    """Desenha risquinhos em lados iguais (apos formacao do triangulo)."""
+    lens = [seg["len"] for seg in group["segments"]]
+    eps_len = 1e-3
+    e01 = abs(lens[0] - lens[1]) <= eps_len
+    e02 = abs(lens[0] - lens[2]) <= eps_len
+    e12 = abs(lens[1] - lens[2]) <= eps_len
+
+    ticks = [0, 0, 0]
+
+    if e01 and e02:
+        # equilatero: todos iguais -> 1 risquinho em cada
+        ticks = [1, 1, 1]
+    elif (e01 and not e02 and not e12):
+        # lados 0 e 1 iguais
+        ticks = [1, 1, 0]
+    elif (e02 and not e01 and not e12):
+        # lados 0 e 2 iguais
+        ticks = [1, 0, 1]
+    elif (e12 and not e01 and not e02):
+        # lados 1 e 2 iguais
+        ticks = [0, 1, 1]
+    else:
+        # escaleno: sem risquinhos
+        ticks = [0, 0, 0]
+
+    for i, seg in enumerate(group["segments"]):
+        if ticks[i] <= 0:
+            continue
+        (x1, y1), (x2, y2) = seg["p1"], seg["p2"]
+        dx = x2 - x1
+        dy = y2 - y1
+        d = math.hypot(dx, dy)
+        if d == 0:
+            continue
+        mx = (x1 + x2) / 2.0
+        my = (y1 + y2) / 2.0
+        nx = -dy / d
+        ny = dx / d
+        size = 10.0
+        ex = nx * size / 2.0
+        ey = ny * size / 2.0
+
+        ctx.beginPath()
+        ctx.strokeStyle = "black"
+        ctx.lineWidth = 2
+        ctx.moveTo(mx - ex, my - ey)
+        ctx.lineTo(mx + ex, my + ey)
+        ctx.stroke()
+
+def draw():
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    ctx.setTransform(zoom, 0, 0, zoom, 0, 0)
+
+    for group in groups:
+        # poligono (triangulo valido) se existir
+        if group["polygon"] is not None:
+            color = group.get("fillColor", "rgba(0,150,255,0.5)")
+            ctx.beginPath()
+            ctx.fillStyle = color
+            v0, v1, v2 = group["polygon"]
+            ctx.moveTo(*v0)
+            ctx.lineTo(*v1)
+            ctx.lineTo(*v2)
+            ctx.closePath()
+            ctx.fill()
+
+        # segmentos
+        for seg in group["segments"]:
+            (x1, y1), (x2, y2) = seg["p1"], seg["p2"]
+            ctx.beginPath()
+            ctx.lineWidth = 4
+            ctx.strokeStyle = seg["color"]
+            ctx.moveTo(x1, y1)
+            ctx.lineTo(x2, y2)
+            ctx.stroke()
+            draw_point(x1, y1, seg["color"])
+            draw_point(x2, y2, seg["color"])
+
+        # risquinhos de lados iguais (so para triangulos validos)
+        if group["polygon"] is not None and group["can_triangle"]:
+            draw_side_marks(group)
+
+def snap_endpoints(group):
+    """Cola pontas proximas dentro de um mesmo grupo."""
+    pts = []
+    for seg in group["segments"]:
+        pts.append(seg["p1"])
+        pts.append(seg["p2"])
+
+    n = len(pts)
+    for i in range(n):
+        for j in range(i + 1, n):
+            p1 = pts[i]
+            p2 = pts[j]
+            if distance(p1, p2) <= SNAP_DIST:
+                mx = (p1[0] + p2[0]) / 2
+                my = (p1[1] + p2[1]) / 2
+                p1[0], p1[1] = mx, my
+                p2[0], p2[1] = mx, my
+
+def check_triangle_formed(group):
+    """Detecta conexao dos 3 segmentos.
+       - Se can_triangle=True: so finaliza quando for triangulo fechado.
+       - Se can_triangle=False: ao formar cadeia conectada, libera novos lados
+         e trava o grupo (bloco articulado nas pontas)."""
+    global active_group, selected_group
+
+    verts = {}
+    for seg in group["segments"]:
+        for key in ("p1", "p2"):
+            p = seg[key]
+            v = (round(p[0], 3), round(p[1], 3))
+            verts[v] = verts.get(v, 0) + 1
+
+    num_verts = len(verts)
+    degrees = list(verts.values())
+
+    # ----------- CASO 1: TRIANGULO FECHADO (sempre finaliza e trava) ----------
+    if num_verts == 3 and all(d == 2 for d in degrees):
+        group["locked"] = True
+        active_group = None
+        selected_group = group
+        set_inputs_enabled(True)
+
+        xs = [v[0] for v in verts.keys()]
+        ys = [v[1] for v in verts.keys()]
+        cx = sum(xs) / 3
+        cy = sum(ys) / 3
+        verts_sorted = sorted(verts.keys(), key=lambda v: math.atan2(v[1]-cy, v[0]-cx))
+        v0, v1, v2 = verts_sorted
+
+        L1 = distance(v0, v1)
+        L2 = distance(v1, v2)
+        L3 = distance(v2, v0)
+
+        # validar triangulo
+        if not ((L1 + L2 > L3) and (L1 + L3 > L2) and (L2 + L3 > L1)):
+            group["polygon"] = None
+            document.getElementById("status").innerText = (
+                "Segmentos conectados em loop, mas nao formam triangulo valido. Voce pode inserir novos lados."
+            )
+            return
+
+        # ---------- CLASSIFICACAO POR ANGULO (cores de preenchimento) ----------
+        sides = sorted([L1, L2, L3])
+        a, b, c = sides  # c eh o maior
+        eps = 1e-4
+        s2 = c*c
+        soma = a*a + b*b
+        if abs(s2 - soma) <= eps:
+            # retangulo -> verde mais forte
+            group["fillColor"] = "rgba(0,200,0,0.5)"
+        elif s2 < soma:
+            # acutangulo -> vermelho mais forte
+            group["fillColor"] = "rgba(255,0,0,0.5)"
+        else:
+            # obtusangulo -> azul mais forte
+            group["fillColor"] = "rgba(0,0,255,0.5)"
+
+        # apos formar triangulo, segmentos ficam pretos
+        for seg in group["segments"]:
+            seg["color"] = "black"
+
+        group["polygon"] = [v0, v1, v2]
+        document.getElementById("status").innerText = (
+            "Triangulo valido formado! Voce pode inserir novos lados."
+        )
+        return
+
+    # ----------- CASO 2: CADEIA ABERTA CONECTADA (1-1-2-2) -----------
+    if not group["can_triangle"]:
+        if num_verts == 4 and sorted(degrees) == [1, 1, 2, 2]:
+            # libera novos lados E trava o grupo
+            group["locked"] = True
+            active_group = None
+            selected_group = group
+            set_inputs_enabled(True)
+            group["polygon"] = None
+            document.getElementById("status").innerText = (
+                "Segmentos conectados em cadeia, mas esses lados nao formam triangulo. "
+                "Voce pode inserir novos lados; este conjunto se move como bloco e "
+                "as pontas ainda podem girar."
+            )
+            return
+    # se can_triangle=True e ainda e cadeia aberta, continua livre ate fechar
+
+def gerar_segmentos(event=None):
+    global groups, active_group, selected_group
+
+    if active_group is not None:
+        document.getElementById("status").innerText = (
+            "Conecte primeiro o conjunto atual antes de gerar outro."
+        )
+        return
+
+    try:
+        a = float(document.getElementById("ladoA").value)
+        b = float(document.getElementById("ladoB").value)
+        c = float(document.getElementById("ladoC").value)
+    except Exception:
+        document.getElementById("status").innerText = "Valores invalidos."
+        return
+
+    esc = 40
+
+    # inicialmente, segmentos pretos (caso triangulo possivel)
+    segs = [
+        {"p1": [100, 100], "p2": [100 + a*esc, 100], "len": a*esc, "color": "black"},
+        {"p1": [100, 200], "p2": [100 + b*esc, 200], "len": b*esc, "color": "black"},
+        {"p1": [100, 300], "p2": [100 + c*esc, 300], "len": c*esc, "color": "black"},
+    ]
+
+    can_triangle = (a + b > c) and (a + c > b) and (b + c > a)
+
+    # se as medidas nao formam triangulo, pinta tudo de cinza
+    if not can_triangle:
+        for seg in segs:
+            seg["color"] = "gray"
+
+    group = {
+        "segments": segs,
+        "locked": False,
+        "polygon": None,
+        "can_triangle": can_triangle,
+        "fillColor": None,
+    }
+
+    groups.append(group)
+    active_group = group
+    selected_group = group
+
+    set_inputs_enabled(False)
+    if can_triangle:
+        document.getElementById("status").innerText = (
+            "Arraste os segmentos para tentar formar o triangulo."
+        )
+    else:
+        document.getElementById("status").innerText = (
+            "Esses lados nao formam triangulo. Conecte os segmentos em cadeia; "
+            "apos conectar, novos lados serao liberados e o conjunto ficara travado, "
+            "com as pontas ainda girando."
+        )
+    draw()
+
+document.getElementById("gerar").onclick = create_proxy(gerar_segmentos)
+
+def excluir_triangulo(event=None):
+    global groups, active_group, selected_group
+
+    if selected_group is None:
+        document.getElementById("status").innerText = "Nenhum triangulo selecionado."
+        return
+
+    if selected_group is active_group:
+        active_group = None
+        set_inputs_enabled(True)
+
+    groups = [g for g in groups if g is not selected_group]
+    selected_group = None
+    globals()["groups"] = groups
+
+    if not groups:
+        document.getElementById("status").innerText = "Nenhum triangulo na tela."
+    else:
+        document.getElementById("status").innerText = "Triangulo excluido."
+    draw()
+
+document.getElementById("excluir").onclick = create_proxy(excluir_triangulo)
+
+# --------- FUNCOES DE APOIO PARA CLIQUE/DRAG ----------
+def compute_degrees_for_group(group):
+    """Retorna dict { (x,y arredond): grau } para um grupo."""
+    verts = {}
+    for seg in group["segments"]:
+        for key in ("p1", "p2"):
+            p = seg[key]
+            v = (round(p[0], 3), round(p[1], 3))
+            verts[v] = verts.get(v, 0) + 1
+    return verts
+
+def handle_group_drag_click(group, mx, my):
+    """Clique em grupo NAO travado (segmento ou extremidade)."""
+    global dragging_segment, dragging_point, selected_group
+
+    for seg in group["segments"]:
+        p1, p2 = seg["p1"], seg["p2"]
+
+        # extremidades
+        if distance((mx, my), p1) < 10:
+            dragging_point = (group, seg, "p1")
+            selected_group = group
+            draw()
+            return True
+        if distance((mx, my), p2) < 10:
+            dragging_point = (group, seg, "p2")
+            selected_group = group
+            draw()
+            return True
+
+        # corpo
+        if distance(p1, p2) > 0:
+            dist_pr = abs((p2[1] - p1[1])*mx - (p2[0] - p1[0])*my + p2[0]*p1[1] - p2[1]*p1[0]) / distance(p1, p2)
+            if dist_pr < 8:
+                dragging_segment = (group, seg)
+                selected_group = group
+                draw()
+                return True
+    return False
+
+# ----------------- EVENTOS DE MOUSE --------------------
+def on_mousedown(event):
+    global dragging_segment, dragging_point, dragging_triangle_group, last_mouse, selected_group
+
+    mx = event.offsetX / zoom
+    my = event.offsetY / zoom
+    last_mouse = (mx, my)
+
+    # 1) grupos travados
+    for group in groups:
+        if not group["locked"]:
+            continue
+
+        # 1a) caso impossivel de triangulo: permitir arrastar SOMENTE pontas (grau 1)
+        if not group["can_triangle"]:
+            degrees = compute_degrees_for_group(group)
+            for seg in group["segments"]:
+                for name in ("p1", "p2"):
+                    p = seg[name]
+                    v = (round(p[0], 3), round(p[1], 3))
+                    if degrees.get(v, 0) == 1 and distance((mx, my), p) < 10:
+                        dragging_point = (group, seg, name)
+                        selected_group = group
+                        draw()
+                        return
+
+        # 1b) clique em qualquer segmento -> arrastar bloco todo
+        for seg in group["segments"]:
+            p1, p2 = seg["p1"], seg["p2"]
+            if distance(p1, p2) > 0:
+                dist_pr = abs((p2[1] - p1[1])*mx - (p2[0] - p1[0])*my + p2[0]*p1[1] - p2[1]*p1[0]) / distance(p1, p2)
+                if dist_pr < 8:
+                    dragging_triangle_group = group
+                    selected_group = group
+                    draw()
+                    return
+
+    # 2) grupo ativo (se existir e nao estiver travado)
+    if active_group is not None and not active_group["locked"]:
+        if handle_group_drag_click(active_group, mx, my):
+            return
+
+    # 3) outros grupos NAO travados (so por seguranca)
+    for group in groups:
+        if group is active_group or group["locked"]:
+            continue
+        if handle_group_drag_click(group, mx, my):
+            return
+
+    # 4) clique na area de triangulo (para selecao)
+    for group in groups:
+        if group["polygon"] is not None:
+            v0, v1, v2 = group["polygon"]
+            if point_in_triangle((mx, my), v0, v1, v2):
+                selected_group = group
+                draw()
+                return
+
+def point_in_triangle(p, a, b, c):
+    (px, py) = p
+    (ax, ay) = a
+    (bx, by) = b
+    (cx, cy) = c
+
+    denom = (by - cy)*(ax - cx) + (cx - bx)*(ay - cy)
+    if denom == 0:
+        return False
+    u = ((by - cy)*(px - cx) + (cx - bx)*(py - cy)) / denom
+    v = ((cy - ay)*(px - cx) + (ax - cx)*(py - cy)) / denom
+    w = 1 - u - v
+    return (0 <= u <= 1) and (0 <= v <= 1) and (0 <= w <= 1)
+
+def on_mousemove(event):
+    global dragging_segment, dragging_point, dragging_triangle_group, last_mouse
+
+    mx = event.offsetX / zoom
+    my = event.offsetY / zoom
+    if last_mouse is None:
+        last_mouse = (mx, my)
+
+    dx = mx - last_mouse[0]
+    dy = my - last_mouse[1]
+    last_mouse = (mx, my)
+
+    if dragging_triangle_group is not None:
+        g = dragging_triangle_group
+        for seg in g["segments"]:
+            seg["p1"][0] += dx
+            seg["p1"][1] += dy
+            seg["p2"][0] += dx
+            seg["p2"][1] += dy
+        if g["polygon"] is not None:
+            new_poly = []
+            for (x, y) in g["polygon"]:
+                new_poly.append((x + dx, y + dy))
+            g["polygon"] = new_poly
+        draw()
+        return
+
+    if dragging_segment is not None:
+        group, seg = dragging_segment
+        seg["p1"][0] += dx
+        seg["p1"][1] += dy
+        seg["p2"][0] += dx
+        seg["p2"][1] += dy
+        draw()
+        return
+
+    if dragging_point is not None:
+        group, seg, name = dragging_point
+        other = "p2" if name == "p1" else "p1"
+        ox, oy = seg[other]
+        vx = mx - ox
+        vy = my - oy
+        d = (vx*vx + vy*vy) ** 0.5
+        if d == 0:
+            return
+        L = seg["len"]
+        vx /= d
+        vy /= d
+        seg[name][0] = ox + vx * L
+        seg[name][1] = oy + vy * L
+        draw()
+        return
+
+def on_mouseup(event):
+    global dragging_segment, dragging_point, dragging_triangle_group, last_mouse
+
+    dragging_segment = None
+    dragging_point = None
+    dragging_triangle_group = None
+    last_mouse = None
+
+    if active_group is not None and not active_group["locked"]:
+        snap_endpoints(active_group)
+        check_triangle_formed(active_group)
+        draw()
+
+canvas.addEventListener("mousedown", create_proxy(on_mousedown))
+canvas.addEventListener("mousemove", create_proxy(on_mousemove))
+canvas.addEventListener("mouseup", create_proxy(on_mouseup))
+
+# ----------------- ZOOM NO CANVAS --------------------
+def on_wheel(event):
+    global zoom
+    delta = event.deltaY
+    if delta < 0:
+        zoom *= 1.1
+    else:
+        zoom /= 1.1
+    if zoom < 0.4:
+        zoom = 0.4
+    if zoom > 3.0:
+        zoom = 3.0
+    draw()
+    event.preventDefault()
+
+canvas.addEventListener("wheel", create_proxy(on_wheel))
+
+draw()
+</script>
+
+</body>
+</html>

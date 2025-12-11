@@ -82,8 +82,15 @@ import math
 canvas = document.getElementById("canvas")
 ctx = canvas.getContext("2d")
 
-# grupo: {"segments":[...], "locked":bool, "polygon":[(x,y),...],
-#         "can_triangle":bool, "fillColor":str|None}
+# grupo: {
+#   "segments":[...],
+#   "locked":bool,
+#   "polygon":[(x,y),...],
+#   "can_triangle":bool,
+#   "fillColor":str|None,
+#   "right_angle": {"R":(x,y), "A":(x,y), "B":(x,y)} | None,
+#   "sides":[a,b,c] (ordenados)
+# }
 groups = []
 active_group = None
 selected_group = None
@@ -110,31 +117,78 @@ def draw_point(x, y, color):
     ctx.arc(x, y, 7, 0, 6.28)
     ctx.fill()
 
+def classify_by_angles(a, b, c):
+    """
+    Classifica pelos angulos usando apenas os lados digitados.
+    Devolve "acute", "right" ou "obtuse".
+    a <= b <= c (ordenados).
+    """
+    a, b, c = sorted([a, b, c])
+    if c == 0:
+        return "acute"
+    lhs = a*a + b*b
+    rhs = c*c
+    rel = abs(lhs - rhs) / max(rhs, 1.0)
+    # Tolerância bem pequena porque vem dos dados numéricos do aluno
+    if rel < 1e-6:
+        return "right"
+    elif lhs > rhs:
+        return "acute"
+    else:
+        return "obtuse"
+
+def draw_right_angle_mark(group):
+    """Desenha o quadradinho no vertice reto, se houver."""
+    ra = group.get("right_angle")
+    if not ra:
+        return
+    (Rx, Ry) = ra["R"]
+    (Ax, Ay) = ra["A"]
+    (Bx, By) = ra["B"]
+
+    v1x, v1y = Ax - Rx, Ay - Ry
+    v2x, v2y = Bx - Rx, By - Ry
+    d1 = math.hypot(v1x, v1y)
+    d2 = math.hypot(v2x, v2y)
+    if d1 == 0 or d2 == 0:
+        return
+    v1x /= d1; v1y /= d1
+    v2x /= d2; v2y /= d2
+
+    size = 18.0
+    p1x = Rx + v1x * size
+    p1y = Ry + v1y * size
+    p3x = Rx + v2x * size
+    p3y = Ry + v2y * size
+    p2x = p1x + v2x * size
+    p2y = p1y + v2y * size
+
+    ctx.beginPath()
+    ctx.strokeStyle = "black"
+    ctx.lineWidth = 2
+    ctx.moveTo(Rx, Ry)
+    ctx.lineTo(p1x, p1y)
+    ctx.lineTo(p2x, p2y)
+    ctx.lineTo(p3x, p3y)
+    ctx.stroke()
+
 def draw_side_marks(group):
-    """Desenha risquinhos em lados iguais (apos formacao do triangulo)."""
+    """Risquinhos em lados iguais (apos formar o triangulo)."""
     lens = [seg["len"] for seg in group["segments"]]
-    eps_len = 1e-3
-    e01 = abs(lens[0] - lens[1]) <= eps_len
-    e02 = abs(lens[0] - lens[2]) <= eps_len
-    e12 = abs(lens[1] - lens[2]) <= eps_len
+    eps = 1e-2
+    e01 = abs(lens[0] - lens[1]) <= eps
+    e02 = abs(lens[0] - lens[2]) <= eps
+    e12 = abs(lens[1] - lens[2]) <= eps
 
     ticks = [0, 0, 0]
-
     if e01 and e02:
-        # equilatero: todos iguais -> 1 risquinho em cada
-        ticks = [1, 1, 1]
-    elif (e01 and not e02 and not e12):
-        # lados 0 e 1 iguais
+        ticks = [1, 1, 1]   # equilatero
+    elif e01 and not e02 and not e12:
         ticks = [1, 1, 0]
-    elif (e02 and not e01 and not e12):
-        # lados 0 e 2 iguais
+    elif e02 and not e01 and not e12:
         ticks = [1, 0, 1]
-    elif (e12 and not e01 and not e02):
-        # lados 1 e 2 iguais
+    elif e12 and not e01 and not e02:
         ticks = [0, 1, 1]
-    else:
-        # escaleno: sem risquinhos
-        ticks = [0, 0, 0]
 
     for i, seg in enumerate(group["segments"]):
         if ticks[i] <= 0:
@@ -160,6 +214,47 @@ def draw_side_marks(group):
         ctx.lineTo(mx + ex, my + ey)
         ctx.stroke()
 
+def draw_segment_label(seg):
+    """
+    Desenha o valor do lado (medida digitada) próximo ao segmento.
+    O texto acompanha o segmento ao mover/rotacionar.
+    """
+    (x1, y1), (x2, y2) = seg["p1"], seg["p2"]
+    dx = x2 - x1
+    dy = y2 - y1
+    d = math.hypot(dx, dy)
+    if d == 0:
+        return
+
+    # ponto medio
+    mx = (x1 + x2) / 2.0
+    my = (y1 + y2) / 2.0
+
+    # vetor perpendicular normalizado
+    nx = -dy / d
+    ny = dx / d
+
+    # deslocamento para fora do segmento
+    offset = 16.0
+    tx = mx + nx * offset
+    ty = my + ny * offset
+
+    # texto: medida original do lado (na unidade digitada)
+    val = seg.get("value", None)
+    if val is None:
+        return
+    # mostrar sem casas decimais se for inteiro, senão 2 casas
+    if abs(val - round(val)) < 1e-9:
+        text = str(int(round(val)))
+    else:
+        text = f"{val:.2f}"
+
+    ctx.save()
+    ctx.font = "14px Arial"
+    ctx.fillStyle = "black"
+    ctx.fillText(text, tx, ty)
+    ctx.restore()
+
 def draw():
     ctx.setTransform(1, 0, 0, 1, 0, 0)
     ctx.clearRect(0, 0, canvas.width, canvas.height)
@@ -168,15 +263,21 @@ def draw():
     for group in groups:
         # poligono (triangulo valido) se existir
         if group["polygon"] is not None:
-            color = group.get("fillColor", "rgba(0,150,255,0.5)")
             ctx.beginPath()
-            ctx.fillStyle = color
+            if group.get("fillColor"):
+                ctx.fillStyle = group["fillColor"]
+            else:
+                ctx.fillStyle = "rgba(0, 150, 255, 0.25)"
             v0, v1, v2 = group["polygon"]
             ctx.moveTo(*v0)
             ctx.lineTo(*v1)
             ctx.lineTo(*v2)
             ctx.closePath()
             ctx.fill()
+
+            # marcações extras
+            draw_side_marks(group)
+            draw_right_angle_mark(group)
 
         # segmentos
         for seg in group["segments"]:
@@ -190,9 +291,8 @@ def draw():
             draw_point(x1, y1, seg["color"])
             draw_point(x2, y2, seg["color"])
 
-        # risquinhos de lados iguais (so para triangulos validos)
-        if group["polygon"] is not None and group["can_triangle"]:
-            draw_side_marks(group)
+            # NOVO: desenhar a medida do lado
+            draw_segment_label(seg)
 
 def snap_endpoints(group):
     """Cola pontas proximas dentro de um mesmo grupo."""
@@ -213,11 +313,11 @@ def snap_endpoints(group):
                 p2[0], p2[1] = mx, my
 
 def check_triangle_formed(group):
-    """Detecta conexao dos 3 segmentos.
-       - Se can_triangle=True: so finaliza quando for triangulo fechado.
-       - Se can_triangle=False: ao formar cadeia conectada, libera novos lados
-         e trava o grupo (bloco articulado nas pontas)."""
+    """Detecta conexao dos 3 segmentos."""
     global active_group, selected_group
+
+    group["right_angle"] = None
+    group["fillColor"] = None
 
     verts = {}
     for seg in group["segments"]:
@@ -229,7 +329,7 @@ def check_triangle_formed(group):
     num_verts = len(verts)
     degrees = list(verts.values())
 
-    # ----------- CASO 1: TRIANGULO FECHADO (sempre finaliza e trava) ----------
+    # ----------- CASO 1: TRIANGULO FECHADO ----------
     if num_verts == 3 and all(d == 2 for d in degrees):
         group["locked"] = True
         active_group = None
@@ -243,48 +343,55 @@ def check_triangle_formed(group):
         verts_sorted = sorted(verts.keys(), key=lambda v: math.atan2(v[1]-cy, v[0]-cx))
         v0, v1, v2 = verts_sorted
 
-        L1 = distance(v0, v1)
-        L2 = distance(v1, v2)
-        L3 = distance(v2, v0)
+        # comprimentos geometricos (so para achar o vertice oposto ao maior lado)
+        L01 = distance(v0, v1)
+        L12 = distance(v1, v2)
+        L20 = distance(v2, v0)
 
-        # validar triangulo
-        if not ((L1 + L2 > L3) and (L1 + L3 > L2) and (L2 + L3 > L1)):
+        if (L01 + L12 > L20) and (L01 + L20 > L12) and (L12 + L20 > L01):
+            # classificação pelos lados digitados
+            a, b, c = group["sides"]
+            tipo = classify_by_angles(a, b, c)
+
+            if tipo == "acute":
+                group["fillColor"] = "rgba(255, 0, 0, 0.5)"   # vermelho
+            elif tipo == "right":
+                group["fillColor"] = "rgba(0, 200, 0, 0.5)"   # verde
+            else:
+                group["fillColor"] = "rgba(0, 0, 255, 0.5)"   # azul
+
+            group["polygon"] = [v0, v1, v2]
+
+            # segmentos pretos depois de formar
+            for seg in group["segments"]:
+                seg["color"] = "black"
+
+            # angulo reto -> vertice oposto ao maior lado geometrico
+            if tipo == "right":
+                lens = [L01, L12, L20]
+                max_idx = max(range(3), key=lambda i: lens[i])
+                if max_idx == 0:
+                    R = v2; A = v0; B = v1
+                elif max_idx == 1:
+                    R = v0; A = v1; B = v2
+                else:
+                    R = v1; A = v2; B = v0
+                group["right_angle"] = {"R": R, "A": A, "B": B}
+
+            nome = "acutangulo" if tipo=="acute" else "retangulo" if tipo=="right" else "obtusangulo"
+            document.getElementById("status").innerText = (
+                f"Triangulo valido formado! ({nome}) Voce pode inserir novos lados."
+            )
+        else:
             group["polygon"] = None
             document.getElementById("status").innerText = (
                 "Segmentos conectados em loop, mas nao formam triangulo valido. Voce pode inserir novos lados."
             )
-            return
-
-        # ---------- CLASSIFICACAO POR ANGULO (cores de preenchimento) ----------
-        sides = sorted([L1, L2, L3])
-        a, b, c = sides  # c eh o maior
-        eps = 1e-4
-        s2 = c*c
-        soma = a*a + b*b
-        if abs(s2 - soma) <= eps:
-            # retangulo -> verde mais forte
-            group["fillColor"] = "rgba(0,200,0,0.5)"
-        elif s2 < soma:
-            # acutangulo -> vermelho mais forte
-            group["fillColor"] = "rgba(255,0,0,0.5)"
-        else:
-            # obtusangulo -> azul mais forte
-            group["fillColor"] = "rgba(0,0,255,0.5)"
-
-        # apos formar triangulo, segmentos ficam pretos
-        for seg in group["segments"]:
-            seg["color"] = "black"
-
-        group["polygon"] = [v0, v1, v2]
-        document.getElementById("status").innerText = (
-            "Triangulo valido formado! Voce pode inserir novos lados."
-        )
         return
 
-    # ----------- CASO 2: CADEIA ABERTA CONECTADA (1-1-2-2) -----------
+    # ----------- CASO 2: CADEIA ABERTA CONECTADA (1-1-2-2) -----------  
     if not group["can_triangle"]:
         if num_verts == 4 and sorted(degrees) == [1, 1, 2, 2]:
-            # libera novos lados E trava o grupo
             group["locked"] = True
             active_group = None
             selected_group = group
@@ -296,7 +403,6 @@ def check_triangle_formed(group):
                 "as pontas ainda podem girar."
             )
             return
-    # se can_triangle=True e ainda e cadeia aberta, continua livre ate fechar
 
 def gerar_segmentos(event=None):
     global groups, active_group, selected_group
@@ -317,19 +423,13 @@ def gerar_segmentos(event=None):
 
     esc = 40
 
-    # inicialmente, segmentos pretos (caso triangulo possivel)
     segs = [
-        {"p1": [100, 100], "p2": [100 + a*esc, 100], "len": a*esc, "color": "black"},
-        {"p1": [100, 200], "p2": [100 + b*esc, 200], "len": b*esc, "color": "black"},
-        {"p1": [100, 300], "p2": [100 + c*esc, 300], "len": c*esc, "color": "black"},
+        {"p1": [100, 100], "p2": [100 + a*esc, 100], "len": a*esc, "color": "red",  "value": a},
+        {"p1": [100, 200], "p2": [100 + b*esc, 200], "len": b*esc, "color": "green","value": b},
+        {"p1": [100, 300], "p2": [100 + c*esc, 300], "len": c*esc, "color": "blue", "value": c},
     ]
 
     can_triangle = (a + b > c) and (a + c > b) and (b + c > a)
-
-    # se as medidas nao formam triangulo, pinta tudo de cinza
-    if not can_triangle:
-        for seg in segs:
-            seg["color"] = "gray"
 
     group = {
         "segments": segs,
@@ -337,6 +437,8 @@ def gerar_segmentos(event=None):
         "polygon": None,
         "can_triangle": can_triangle,
         "fillColor": None,
+        "right_angle": None,
+        "sides": sorted([a, b, c]),
     }
 
     groups.append(group)
@@ -383,7 +485,6 @@ document.getElementById("excluir").onclick = create_proxy(excluir_triangulo)
 
 # --------- FUNCOES DE APOIO PARA CLIQUE/DRAG ----------
 def compute_degrees_for_group(group):
-    """Retorna dict { (x,y arredond): grau } para um grupo."""
     verts = {}
     for seg in group["segments"]:
         for key in ("p1", "p2"):
@@ -393,13 +494,11 @@ def compute_degrees_for_group(group):
     return verts
 
 def handle_group_drag_click(group, mx, my):
-    """Clique em grupo NAO travado (segmento ou extremidade)."""
     global dragging_segment, dragging_point, selected_group
 
     for seg in group["segments"]:
         p1, p2 = seg["p1"], seg["p2"]
 
-        # extremidades
         if distance((mx, my), p1) < 10:
             dragging_point = (group, seg, "p1")
             selected_group = group
@@ -411,7 +510,6 @@ def handle_group_drag_click(group, mx, my):
             draw()
             return True
 
-        # corpo
         if distance(p1, p2) > 0:
             dist_pr = abs((p2[1] - p1[1])*mx - (p2[0] - p1[0])*my + p2[0]*p1[1] - p2[1]*p1[0]) / distance(p1, p2)
             if dist_pr < 8:
@@ -434,7 +532,6 @@ def on_mousedown(event):
         if not group["locked"]:
             continue
 
-        # 1a) caso impossivel de triangulo: permitir arrastar SOMENTE pontas (grau 1)
         if not group["can_triangle"]:
             degrees = compute_degrees_for_group(group)
             for seg in group["segments"]:
@@ -447,7 +544,6 @@ def on_mousedown(event):
                         draw()
                         return
 
-        # 1b) clique em qualquer segmento -> arrastar bloco todo
         for seg in group["segments"]:
             p1, p2 = seg["p1"], seg["p2"]
             if distance(p1, p2) > 0:
@@ -458,19 +554,19 @@ def on_mousedown(event):
                     draw()
                     return
 
-    # 2) grupo ativo (se existir e nao estiver travado)
+    # 2) grupo ativo
     if active_group is not None and not active_group["locked"]:
         if handle_group_drag_click(active_group, mx, my):
             return
 
-    # 3) outros grupos NAO travados (so por seguranca)
+    # 3) outros grupos nao travados
     for group in groups:
         if group is active_group or group["locked"]:
             continue
         if handle_group_drag_click(group, mx, my):
             return
 
-    # 4) clique na area de triangulo (para selecao)
+    # 4) clique dentro de triangulo
     for group in groups:
         if group["polygon"] is not None:
             v0, v1, v2 = group["polygon"]
@@ -505,21 +601,32 @@ def on_mousemove(event):
     dy = my - last_mouse[1]
     last_mouse = (mx, my)
 
+    # 1) arrastando grupo travado
     if dragging_triangle_group is not None:
         g = dragging_triangle_group
+
         for seg in g["segments"]:
             seg["p1"][0] += dx
             seg["p1"][1] += dy
             seg["p2"][0] += dx
             seg["p2"][1] += dy
+
         if g["polygon"] is not None:
             new_poly = []
             for (x, y) in g["polygon"]:
                 new_poly.append((x + dx, y + dy))
             g["polygon"] = new_poly
+
+        ra = g.get("right_angle")
+        if ra is not None:
+            for key in ("R", "A", "B"):
+                (x, y) = ra[key]
+                ra[key] = (x + dx, y + dy)
+
         draw()
         return
 
+    # 2) arrastando segmento solto
     if dragging_segment is not None:
         group, seg = dragging_segment
         seg["p1"][0] += dx
@@ -529,6 +636,7 @@ def on_mousemove(event):
         draw()
         return
 
+    # 3) arrastando extremidade
     if dragging_point is not None:
         group, seg, name = dragging_point
         other = "p2" if name == "p1" else "p1"
@@ -554,7 +662,7 @@ def on_mouseup(event):
     dragging_triangle_group = None
     last_mouse = None
 
-    if active_group is not None and not active_group["locked"]:
+    if active_group is not None and not active_group["locked"]]:
         snap_endpoints(active_group)
         check_triangle_formed(active_group)
         draw()
@@ -585,3 +693,5 @@ draw()
 
 </body>
 </html>
+
+

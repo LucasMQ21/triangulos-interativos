@@ -264,20 +264,23 @@ def draw_segment_label(seg):
     ctx.restore()
 
 def draw_angle_arcs(group):
-    """Desenha arcos nos angulos (exceto o reto, que ja tem quadradinho)."""
+    """Desenha arcos nos angulos (exceto o reto) e
+       colore de verde fluorescente os angulos congruentes."""
     angles = group.get("angles")
     if not angles:
         return
 
     ticks = group.get("angle_ticks", [0, 0, 0])
     ctx.save()
-    ctx.strokeStyle = "black"
-    ctx.lineWidth = 1.5
+    ctx.lineWidth = 2.0
+
+    base_radius = 22.0
+    congruent_color = "#00ff66"  # verde fluorescente
 
     for idx, ang in enumerate(angles):
         val = ang["value"]
         if abs(val - 90.0) < 1e-2:
-            # angulo reto ja marcado pelo quadrado
+            # angulo reto já tem quadradinho
             continue
 
         (Vx, Vy) = ang["vertex"]
@@ -296,28 +299,22 @@ def draw_angle_arcs(group):
         t1 = math.atan2(v1y, v1x)
         t2 = math.atan2(v2y, v2x)
 
+        # arco menor
         delta = (t2 - t1) % (2 * math.pi)
         if delta > math.pi:
-            # usa o arco menor
             t1, t2 = t2, t1
 
-        radius = 22.0
+        radius = base_radius
+
+        # cor: verde para angulos congruentes, preto para o resto
+        if ticks[idx] > 0:
+            ctx.strokeStyle = congruent_color
+        else:
+            ctx.strokeStyle = "black"
+
         ctx.beginPath()
         ctx.arc(Vx, Vy, radius, t1, t2, False)
         ctx.stroke()
-
-        # risquinho de congruencia
-        if ticks[idx] > 0:
-            mid = (t1 + t2) / 2.0
-            px = Vx + radius * math.cos(mid)
-            py = Vy + radius * math.sin(mid)
-            nx = -math.sin(mid)
-            ny = math.cos(mid)
-            size = 6.0
-            ctx.beginPath()
-            ctx.moveTo(px - nx * size / 2.0, py - ny * size / 2.0)
-            ctx.lineTo(px + nx * size / 2.0, py + ny * size / 2.0)
-            ctx.stroke()
 
     ctx.restore()
 
@@ -344,7 +341,7 @@ def draw_angle_labels(group):
             continue
 
         # vetor para fora a partir do vertice (mesma distancia para todos)
-        offset = 32.0
+        offset = 40.0     # afastado um pouco mais do vértice
         tx = vx + (dx / d) * offset
         ty = vy + (dy / d) * offset
 
@@ -419,7 +416,7 @@ def compute_angles_and_marks(group, v0, v1, v2, tipo_ang):
       - retangulo: 90 exato;
       - isosceles: dois angulos exatamente iguais;
       - equilatero: 60,60,60;
-    define centroid, estrutura de angulos e risquinhos de congruencia.
+    define centroid, estrutura de angulos e grupos de congruencia.
     """
     verts = [v0, v1, v2]
 
@@ -443,7 +440,7 @@ def compute_angles_and_marks(group, v0, v1, v2, tipo_ang):
         elif (same_point(p1, v2) and same_point(p2, v0)) or (same_point(p1, v0) and same_point(p2, v2)):
             s20 = val
 
-    # fallback (nao deveria acontecer, mas so para garantir)
+    # fallback: comprimentos geométricos
     if s01 is None:
         s01 = distance(v0, v1)
     if s12 is None:
@@ -495,7 +492,7 @@ def compute_angles_and_marks(group, v0, v1, v2, tipo_ang):
                     angles[i] *= scale
             angles[idx_max] = right_exact
 
-        # Ajuste isosceles (inclusive retangulo isosceles)
+        # Ajuste isosceles (sem ser equilátero)
         if iso_pair is not None and not (eq01 and eq12):
             i, j = iso_pair
             v = (angles[i] + angles[j]) / 2.0
@@ -509,7 +506,7 @@ def compute_angles_and_marks(group, v0, v1, v2, tipo_ang):
     diff = 180.0 - total
     angles[0] += diff
 
-    # ---- Definir risquinhos de congruencia pelos angulos finais
+    # ---- Definir grupos de congruencia pelos angulos finais
     eps_ang = 1e-2
     equal01 = abs(angles[0] - angles[1]) < eps_ang
     equal12 = abs(angles[1] - angles[2]) < eps_ang
@@ -614,7 +611,7 @@ def check_triangle_formed(group):
                     R = v1; A = v2; B = v0
                 group["right_angle"] = {"R": R, "A": A, "B": B}
 
-            # calcula angulos, centroid e risquinhos
+            # calcula angulos, centroid e grupos de congruencia
             compute_angles_and_marks(group, v0, v1, v2, tipo_ang)
 
             nome = "acutangulo" if tipo_ang=="acute" else "retangulo" if tipo_ang=="right" else "obtusangulo"
@@ -624,7 +621,7 @@ def check_triangle_formed(group):
         else:
             group["polygon"] = None
             document.getElementById("status").innerText = (
-                "Segmentos conectados em loop, mas nao formam triangulo valido. Voce pode inserir novos lados."
+                "Segmentos conectados em loop. Observe se eles formam um triangulo valido."
             )
         return
 
@@ -637,9 +634,7 @@ def check_triangle_formed(group):
             set_inputs_enabled(True)
             group["polygon"] = None
             document.getElementById("status").innerText = (
-                "Segmentos conectados em cadeia, mas esses lados nao formam triangulo. "
-                "Voce pode inserir novos lados; este conjunto se move como bloco e "
-                "as pontas ainda podem girar."
+                "Segmentos conectados em cadeia. Voce pode inserir novos lados e continuar investigando."
             )
             return
 
@@ -688,16 +683,10 @@ def gerar_segmentos(event=None):
     selected_group = group
 
     set_inputs_enabled(False)
-    if can_triangle:
-        document.getElementById("status").innerText = (
-            "Arraste os segmentos para tentar formar o triangulo."
-        )
-    else:
-        document.getElementById("status").innerText = (
-            "Esses lados nao formam triangulo. Conecte os segmentos em cadeia; "
-            "apos conectar, novos lados serao liberados e o conjunto ficara travado, "
-            "com as pontas ainda girando."
-        )
+    # Mensagem única, incentivando a exploração em TODOS os casos
+    document.getElementById("status").innerText = (
+        "Conecte os segmentos e tente formar um triangulo."
+    )
     draw()
 
 document.getElementById("gerar").onclick = create_proxy(gerar_segmentos)
@@ -961,10 +950,3 @@ draw()
 
 </body>
 </html>
-
- 
-
-
-
-
-

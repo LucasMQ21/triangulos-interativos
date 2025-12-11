@@ -38,6 +38,17 @@
         .input-row {
             margin-bottom: 10px;
         }
+
+        .zoom-row {
+            margin-top: 10px;
+            margin-bottom: 10px;
+        }
+
+        .zoom-row button {
+            width: 30px;
+            height: 30px;
+            margin-right: 5px;
+        }
     </style>
 </head>
 
@@ -62,6 +73,13 @@
 
         <button id="gerar">Gerar Segmentos</button>
         <button id="excluir">Excluir Triangulo Selecionado</button>
+
+        <!-- NOVO: controles de zoom -->
+        <div class="zoom-row">
+            Zoom:
+            <button id="zoomIn">+</button>
+            <button id="zoomOut">-</button>
+        </div>
 
         <h4>Status:</h4>
         <div id="status">Aguardando dados.</div>
@@ -129,7 +147,6 @@ def classify_by_angles(a, b, c):
     lhs = a*a + b*b
     rhs = c*c
     rel = abs(lhs - rhs) / max(rhs, 1.0)
-    # Tolerância bem pequena porque vem dos dados numéricos do aluno
     if rel < 1e-6:
         return "right"
     elif lhs > rhs:
@@ -226,24 +243,20 @@ def draw_segment_label(seg):
     if d == 0:
         return
 
-    # ponto medio
     mx = (x1 + x2) / 2.0
     my = (y1 + y2) / 2.0
 
-    # vetor perpendicular normalizado
     nx = -dy / d
     ny = dx / d
 
-    # deslocamento para fora do segmento
     offset = 16.0
     tx = mx + nx * offset
     ty = my + ny * offset
 
-    # texto: medida original do lado (na unidade digitada)
     val = seg.get("value", None)
     if val is None:
         return
-    # mostrar sem casas decimais se for inteiro, senão 2 casas
+
     if abs(val - round(val)) < 1e-9:
         text = str(int(round(val)))
     else:
@@ -275,12 +288,11 @@ def draw():
             ctx.closePath()
             ctx.fill()
 
-            # marcações extras
             draw_side_marks(group)
             draw_right_angle_mark(group)
 
         # segmentos
-        for seg in group["segments"]:
+        for seg in group["segments"]]:
             (x1, y1), (x2, y2) = seg["p1"], seg["p2"]
             ctx.beginPath()
             ctx.lineWidth = 4
@@ -291,13 +303,12 @@ def draw():
             draw_point(x1, y1, seg["color"])
             draw_point(x2, y2, seg["color"])
 
-            # NOVO: desenhar a medida do lado
             draw_segment_label(seg)
 
 def snap_endpoints(group):
     """Cola pontas proximas dentro de um mesmo grupo."""
     pts = []
-    for seg in group["segments"]:
+    for seg in group["segments"]]:
         pts.append(seg["p1"])
         pts.append(seg["p2"])
 
@@ -320,7 +331,7 @@ def check_triangle_formed(group):
     group["fillColor"] = None
 
     verts = {}
-    for seg in group["segments"]:
+    for seg in group["segments"]]:
         for key in ("p1", "p2"):
             p = seg[key]
             v = (round(p[0], 3), round(p[1], 3))
@@ -343,30 +354,26 @@ def check_triangle_formed(group):
         verts_sorted = sorted(verts.keys(), key=lambda v: math.atan2(v[1]-cy, v[0]-cx))
         v0, v1, v2 = verts_sorted
 
-        # comprimentos geometricos (so para achar o vertice oposto ao maior lado)
         L01 = distance(v0, v1)
         L12 = distance(v1, v2)
         L20 = distance(v2, v0)
 
         if (L01 + L12 > L20) and (L01 + L20 > L12) and (L12 + L20 > L01):
-            # classificação pelos lados digitados
             a, b, c = group["sides"]
             tipo = classify_by_angles(a, b, c)
 
             if tipo == "acute":
-                group["fillColor"] = "rgba(255, 0, 0, 0.5)"   # vermelho
+                group["fillColor"] = "rgba(255, 0, 0, 0.5)"
             elif tipo == "right":
-                group["fillColor"] = "rgba(0, 200, 0, 0.5)"   # verde
+                group["fillColor"] = "rgba(0, 200, 0, 0.5)"
             else:
-                group["fillColor"] = "rgba(0, 0, 255, 0.5)"   # azul
+                group["fillColor"] = "rgba(0, 0, 255, 0.5)"
 
             group["polygon"] = [v0, v1, v2]
 
-            # segmentos pretos depois de formar
-            for seg in group["segments"]:
+            for seg in group["segments"]]:
                 seg["color"] = "black"
 
-            # angulo reto -> vertice oposto ao maior lado geometrico
             if tipo == "right":
                 lens = [L01, L12, L20]
                 max_idx = max(range(3), key=lambda i: lens[i])
@@ -389,7 +396,7 @@ def check_triangle_formed(group):
             )
         return
 
-    # ----------- CASO 2: CADEIA ABERTA CONECTADA (1-1-2-2) -----------  
+    # ----------- CASO 2: CADEIA ABERTA CONECTADA (1-1-2-2) -----------
     if not group["can_triangle"]:
         if num_verts == 4 and sorted(degrees) == [1, 1, 2, 2]:
             group["locked"] = True
@@ -486,7 +493,7 @@ document.getElementById("excluir").onclick = create_proxy(excluir_triangulo)
 # --------- FUNCOES DE APOIO PARA CLIQUE/DRAG ----------
 def compute_degrees_for_group(group):
     verts = {}
-    for seg in group["segments"]:
+    for seg in group["segments"]]:
         for key in ("p1", "p2"):
             p = seg[key]
             v = (round(p[0], 3), round(p[1], 3))
@@ -496,7 +503,7 @@ def compute_degrees_for_group(group):
 def handle_group_drag_click(group, mx, my):
     global dragging_segment, dragging_point, selected_group
 
-    for seg in group["segments"]:
+    for seg in group["segments"]]:
         p1, p2 = seg["p1"], seg["p2"]
 
         if distance((mx, my), p1) < 10:
@@ -534,7 +541,7 @@ def on_mousedown(event):
 
         if not group["can_triangle"]:
             degrees = compute_degrees_for_group(group)
-            for seg in group["segments"]:
+            for seg in group["segments"]]:
                 for name in ("p1", "p2"):
                     p = seg[name]
                     v = (round(p[0], 3), round(p[1], 3))
@@ -544,7 +551,7 @@ def on_mousedown(event):
                         draw()
                         return
 
-        for seg in group["segments"]:
+        for seg in group["segments"]]:
             p1, p2 = seg["p1"], seg["p2"]
             if distance(p1, p2) > 0:
                 dist_pr = abs((p2[1] - p1[1])*mx - (p2[0] - p1[0])*my + p2[0]*p1[1] - p2[1]*p1[0]) / distance(p1, p2)
@@ -605,7 +612,7 @@ def on_mousemove(event):
     if dragging_triangle_group is not None:
         g = dragging_triangle_group
 
-        for seg in g["segments"]:
+        for seg in g["segments"]]:
             seg["p1"][0] += dx
             seg["p1"][1] += dy
             seg["p2"][0] += dx
@@ -688,11 +695,31 @@ def on_wheel(event):
 
 canvas.addEventListener("wheel", create_proxy(on_wheel))
 
+# NOVO: botoes de zoom
+def zoom_in(event=None):
+    global zoom
+    zoom *= 1.1
+    if zoom > 3.0:
+        zoom = 3.0
+    draw()
+
+def zoom_out(event=None):
+    global zoom
+    zoom /= 1.1
+    if zoom < 0.4:
+        zoom = 0.4
+    draw()
+
+document.getElementById("zoomIn").onclick = create_proxy(zoom_in)
+document.getElementById("zoomOut").onclick = create_proxy(zoom_out)
+
 draw()
 </script>
 
 </body>
 </html>
+
+
 
 
 
